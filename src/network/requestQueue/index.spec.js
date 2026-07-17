@@ -151,6 +151,18 @@ describe('Network > RequestQueue', () => {
         expect(requestQueue.pending.length).toEqual(1)
       })
 
+      it('does not poll while maxInFlightRequests is the blocker', () => {
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
+
+        try {
+          requestQueue.push(request)
+          expect(requestQueue.pending.length).toEqual(1)
+          expect(setTimeoutSpy).not.toHaveBeenCalled()
+        } finally {
+          setTimeoutSpy.mockRestore()
+        }
+      })
+
       describe('when the request does not require a response', () => {
         beforeEach(() => {
           request.expectResponse = false
@@ -209,6 +221,43 @@ describe('Network > RequestQueue', () => {
 
       const sentAt = await sendDone
       expect(sentAt).toBeGreaterThanOrEqual(before + clientSideThrottleTime)
+    })
+
+    it('sends a request when a marginal throttle expires while it is being enqueued', () => {
+      jest.useFakeTimers()
+      const dateNow = jest
+        .spyOn(Date, 'now')
+        .mockReturnValueOnce(1000)
+        .mockReturnValueOnce(1000)
+        .mockReturnValueOnce(1000)
+        .mockReturnValue(1001)
+
+      try {
+        requestQueue.maybeThrottle(1)
+        requestQueue.push(request)
+
+        expect(requestQueue.pending.length).toEqual(1)
+        expect(send).not.toHaveBeenCalled()
+
+        jest.runOnlyPendingTimers()
+
+        expect(send).toHaveBeenCalledTimes(1)
+        expect(requestQueue.pending.length).toEqual(0)
+      } finally {
+        dateNow.mockRestore()
+        jest.useRealTimers()
+      }
+    })
+
+    it('does not schedule checks while the request queue is empty', () => {
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
+
+      try {
+        requestQueue.scheduleCheckPendingRequests()
+        expect(setTimeoutSpy).not.toHaveBeenCalled()
+      } finally {
+        setTimeoutSpy.mockRestore()
+      }
     })
 
     it('does not allow for a inflight correlation ids collision', async () => {
