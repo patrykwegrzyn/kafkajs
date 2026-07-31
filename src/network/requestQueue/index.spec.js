@@ -153,11 +153,14 @@ describe('Network > RequestQueue', () => {
 
       it('does not poll while maxInFlightRequests is the blocker', () => {
         const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
+        const logger = { debug: jest.fn(), warn: jest.fn() }
+        requestQueue.logger = logger
 
         try {
           requestQueue.push(request)
           expect(requestQueue.pending.length).toEqual(1)
           expect(setTimeoutSpy).not.toHaveBeenCalled()
+          expect(logger.warn).not.toHaveBeenCalled()
         } finally {
           setTimeoutSpy.mockRestore()
         }
@@ -225,6 +228,9 @@ describe('Network > RequestQueue', () => {
 
     it('sends a request when a marginal throttle expires while it is being enqueued', () => {
       jest.useFakeTimers()
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
+      const logger = { debug: jest.fn(), warn: jest.fn() }
+      requestQueue.logger = logger
       const dateNow = jest
         .spyOn(Date, 'now')
         .mockReturnValueOnce(1000)
@@ -238,11 +244,46 @@ describe('Network > RequestQueue', () => {
 
         expect(requestQueue.pending.length).toEqual(1)
         expect(send).not.toHaveBeenCalled()
+        expect(logger.warn).toHaveBeenCalledTimes(1)
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Request queue throttle expired during enqueue; scheduling immediate drain',
+          {
+            clientId: 'KafkaJS',
+            broker: 'localhost:9092',
+            correlationId: request.entry.correlationId,
+            currentPendingQueueSize: 1,
+            currentInflightRequests: 0,
+            throttledUntil: 1001,
+            overdueByMs: 0,
+          }
+        )
+        expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 0)
 
         jest.runOnlyPendingTimers()
 
         expect(send).toHaveBeenCalledTimes(1)
         expect(requestQueue.pending.length).toEqual(0)
+        expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        setTimeoutSpy.mockRestore()
+        dateNow.mockRestore()
+        jest.useRealTimers()
+      }
+    })
+
+    it('does not warn while an active throttle is handled normally', () => {
+      jest.useFakeTimers()
+      const logger = { debug: jest.fn(), warn: jest.fn() }
+      requestQueue.logger = logger
+      const dateNow = jest.spyOn(Date, 'now').mockReturnValue(1000)
+
+      try {
+        requestQueue.maybeThrottle(100)
+        requestQueue.push(request)
+
+        expect(requestQueue.pending.length).toEqual(1)
+        expect(logger.warn).not.toHaveBeenCalled()
       } finally {
         dateNow.mockRestore()
         jest.useRealTimers()

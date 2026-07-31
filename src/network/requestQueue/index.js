@@ -309,8 +309,24 @@ module.exports = class RequestQueue extends EventEmitter {
     // calculation. In that marginal case, schedule an immediate check so the
     // request cannot remain pending forever. If maxInFlightRequests is the
     // blocker, fulfillment of an inflight request will check the queue instead.
-    if (timeUntilUnthrottled <= 0 && !this.canSendSocketRequestImmediately()) {
-      return
+    if (timeUntilUnthrottled <= 0) {
+      if (!this.canSendSocketRequestImmediately()) {
+        return
+      }
+
+      const pendingRequest = this.pending[0]
+      this.logger.warn(
+        `Request queue throttle expired during enqueue; scheduling immediate drain`,
+        {
+          clientId: this.clientId,
+          broker: this.broker,
+          correlationId: pendingRequest.correlationId,
+          currentPendingQueueSize: this.pending.length,
+          currentInflightRequests: this.inflight.size,
+          throttledUntil: this.throttledUntil,
+          overdueByMs: Math.max(-timeUntilUnthrottled, 0),
+        }
+      )
     }
 
     this.throttleCheckTimeoutId = setTimeout(() => {
