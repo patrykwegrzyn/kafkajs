@@ -102,7 +102,7 @@ module.exports = class RequestQueue extends EventEmitter {
   }
 
   maybeThrottle(clientSideThrottleTime) {
-    if (clientSideThrottleTime) {
+    if (clientSideThrottleTime > 0) {
       const minimumThrottledUntil = Date.now() + clientSideThrottleTime
       this.throttledUntil = Math.max(minimumThrottledUntil, this.throttledUntil)
     }
@@ -295,17 +295,43 @@ module.exports = class RequestQueue extends EventEmitter {
    * the pending request queue eventually.
    */
   scheduleCheckPendingRequests() {
+    if (this.pending.length === 0 || this.throttleCheckTimeoutId) {
+      return
+    }
+
     // If we're throttled: Schedule checkPendingRequests when the throttle
     // should be resolved. If there is already something scheduled we assume that that
     // will be fine, and potentially fix up a new timeout if needed at that time.
     // Note that if we're merely "overloaded" by having too many inflight requests
     // we will anyways check the queue when one of them gets fulfilled.
     const timeUntilUnthrottled = this.throttledUntil - Date.now()
-    if (timeUntilUnthrottled > 0 && !this.throttleCheckTimeoutId) {
-      this.throttleCheckTimeoutId = setTimeout(() => {
-        this.throttleCheckTimeoutId = null
-        this.checkPendingRequests()
-      }, timeUntilUnthrottled)
+    // The throttle can expire between push() deciding to enqueue and this
+    // calculation. In that marginal case, schedule an immediate check so the
+    // request cannot remain pending forever. If maxInFlightRequests is the
+    // blocker, fulfillment of an inflight request will check the queue instead.
+    if (timeUntilUnthrottled <= 0) {
+      if (!this.canSendSocketRequestImmediately()) {
+        return
+      }
+
+      const pendingRequest = this.pending[0]
+      this.logger.warn(
+        `Request queue throttle expired during enqueue; scheduling immediate drain`,
+        {
+          clientId: this.clientId,
+          broker: this.broker,
+          correlationId: pendingRequest.correlationId,
+          currentPendingQueueSize: this.pending.length,
+          currentInflightRequests: this.inflight.size,
+          throttledUntil: this.throttledUntil,
+          overdueByMs: Math.max(-timeUntilUnthrottled, 0),
+        }
+      )
     }
+
+    this.throttleCheckTimeoutId = setTimeout(() => {
+      this.throttleCheckTimeoutId = null
+      this.checkPendingRequests()
+    }, Math.max(timeUntilUnthrottled, 0))
   }
 }
