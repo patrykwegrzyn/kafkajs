@@ -122,6 +122,17 @@ describe('Client', () => {
       )
     })
 
+    it('allows consumer retry options to override client retry options', () => {
+      const client = new Client({ retry: { retries: 10 } })
+      client.consumer({ retry: { retries: 2 } })
+
+      expect(createConsumer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          retry: { retries: 2 },
+        })
+      )
+    })
+
     it('creates consumer without overriding the retrier defaults', () => {
       const client = new Client({})
       client.consumer()
