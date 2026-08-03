@@ -111,13 +111,24 @@ describe('Client', () => {
       )
     })
 
-    it('creates consumer with the default options', () => {
+    it('preserves client retry options when consumer retry options are omitted', () => {
+      const client = new Client({ retry: { retries: Number.MAX_SAFE_INTEGER } })
+      client.consumer()
+
+      expect(createConsumer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          retry: { retries: Number.MAX_SAFE_INTEGER },
+        })
+      )
+    })
+
+    it('creates consumer without overriding the retrier defaults', () => {
       const client = new Client({})
       client.consumer()
 
       expect(createConsumer).toHaveBeenCalledWith(
         expect.objectContaining({
-          retry: { retries: 5 },
+          retry: {},
         })
       )
     })

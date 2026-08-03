@@ -334,7 +334,7 @@ module.exports = ({
             .offset,
         }))
       } catch (e) {
-        if (e.type === 'UNKNOWN_TOPIC_OR_PARTITION') {
+        if (staleMetadata(e) || e.name === 'KafkaJSMetadataNotLoaded') {
           await cluster.refreshMetadata()
           throw e
         }
@@ -391,7 +391,7 @@ module.exports = ({
                   .offset,
         }))
       } catch (e) {
-        if (e.type === 'UNKNOWN_TOPIC_OR_PARTITION') {
+        if (staleMetadata(e) || e.name === 'KafkaJSMetadataNotLoaded') {
           await cluster.refreshMetadata()
           throw e
         }
