@@ -2,12 +2,98 @@ const createAdmin = require('./index')
 const InstrumentationEventEmitter = require('../instrumentation/emitter')
 const { createCluster, newLogger, secureRandom } = require('testHelpers')
 const createRetry = require('../retry')
+const { errorCodes, createErrorFromCode } = require('../protocol/error')
 
 describe('Admin', () => {
   let admin
 
   afterEach(async () => {
     admin && (await admin.disconnect())
+  })
+
+  describe('fetchTopicOffsets stale metadata recovery', () => {
+    for (const errorType of [
+      'UNKNOWN_TOPIC_OR_PARTITION',
+      'LEADER_NOT_AVAILABLE',
+      'NOT_LEADER_FOR_PARTITION',
+    ]) {
+      test(`refreshes metadata and retries ${errorType}`, async () => {
+        const errorCode = errorCodes.find(({ type }) => type === errorType).code
+        const topicOffsets = () => [
+          {
+            topic: 'test-topic',
+            partitions: [{ partition: 0, offset: '1' }],
+          },
+        ]
+        const cluster = {
+          addTargetTopic: jest.fn(),
+          refreshMetadataIfNecessary: jest.fn(),
+          refreshMetadata: jest.fn(),
+          findTopicPartitionMetadata: jest.fn(() => [{ partitionId: 0 }]),
+          fetchTopicsOffset: jest
+            .fn()
+            .mockRejectedValueOnce(createErrorFromCode(errorCode))
+            .mockImplementation(async () => topicOffsets()),
+          disconnect: jest.fn(),
+        }
+
+        admin = createAdmin({
+          cluster,
+          logger: newLogger(),
+          retry: {
+            retries: 1,
+            initialRetryTime: 1,
+            maxRetryTime: 1,
+            multiplier: 1,
+            factor: 0,
+          },
+        })
+
+        await expect(admin.fetchTopicOffsets('test-topic')).resolves.toEqual([
+          { partition: 0, offset: '1', high: '1', low: '1' },
+        ])
+        expect(cluster.refreshMetadata).toHaveBeenCalledTimes(1)
+        expect(cluster.fetchTopicsOffset).toHaveBeenCalledTimes(3)
+      })
+    }
+
+    test('fetchTopicOffsetsByTimestamp refreshes metadata and retries a stale leader', async () => {
+      const errorCode = errorCodes.find(({ type }) => type === 'NOT_LEADER_FOR_PARTITION').code
+      const cluster = {
+        addTargetTopic: jest.fn(),
+        refreshMetadataIfNecessary: jest.fn(),
+        refreshMetadata: jest.fn(),
+        findTopicPartitionMetadata: jest.fn(() => [{ partitionId: 0 }]),
+        fetchTopicsOffset: jest
+          .fn()
+          .mockRejectedValueOnce(createErrorFromCode(errorCode))
+          .mockImplementation(async () => [
+            {
+              topic: 'test-topic',
+              partitions: [{ partition: 0, offset: '1' }],
+            },
+          ]),
+        disconnect: jest.fn(),
+      }
+
+      admin = createAdmin({
+        cluster,
+        logger: newLogger(),
+        retry: {
+          retries: 1,
+          initialRetryTime: 1,
+          maxRetryTime: 1,
+          multiplier: 1,
+          factor: 0,
+        },
+      })
+
+      await expect(admin.fetchTopicOffsetsByTimestamp('test-topic', 123)).resolves.toEqual([
+        { partition: 0, offset: '1' },
+      ])
+      expect(cluster.refreshMetadata).toHaveBeenCalledTimes(1)
+      expect(cluster.fetchTopicsOffset).toHaveBeenCalledTimes(3)
+    })
   })
 
   it('gives access to its logger', () => {

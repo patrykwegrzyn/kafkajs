@@ -102,23 +102,14 @@ module.exports = class RequestQueue extends EventEmitter {
   }
 
   maybeThrottle(clientSideThrottleTime) {
-    if (clientSideThrottleTime > 0) {
+    if (clientSideThrottleTime !== null && clientSideThrottleTime > 0) {
+      this.logger.debug(`Client side throttling in effect for ${clientSideThrottleTime}ms`)
       const minimumThrottledUntil = Date.now() + clientSideThrottleTime
       this.throttledUntil = Math.max(minimumThrottledUntil, this.throttledUntil)
     }
   }
 
-  /**
-   * @typedef {Object} PushedRequest
-   * @property {import("./socketRequest").RequestEntry} entry
-   * @property {boolean} expectResponse
-   * @property {Function} sendRequest
-   * @property {number} [requestTimeout]
-   *
-   * @public
-   * @param {PushedRequest} pushedRequest
-   */
-  push(pushedRequest) {
+  createSocketRequest(pushedRequest) {
     const { correlationId } = pushedRequest.entry
     const defaultRequestTimeout = this.requestTimeout
     const customRequestTimeout = pushedRequest.requestTimeout
@@ -148,6 +139,23 @@ module.exports = class RequestQueue extends EventEmitter {
         this[PRIVATE.EMIT_REQUEST_QUEUE_EMPTY]()
       },
     })
+
+    return socketRequest
+  }
+
+  /**
+   * @typedef {Object} PushedRequest
+   * @property {import("./socketRequest").RequestEntry} entry
+   * @property {boolean} expectResponse
+   * @property {Function} sendRequest
+   * @property {number} [requestTimeout]
+   *
+   * @public
+   * @param {PushedRequest} pushedRequest
+   */
+  push(pushedRequest) {
+    const { correlationId } = pushedRequest.entry
+    const socketRequest = this.createSocketRequest(pushedRequest)
 
     if (this.canSendSocketRequestImmediately()) {
       this.sendSocketRequest(socketRequest)
