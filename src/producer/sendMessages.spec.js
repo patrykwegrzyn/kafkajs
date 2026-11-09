@@ -146,18 +146,49 @@ describe('Producer > sendMessages', () => {
       broker: 'broker-1:9092',
       correlationId: 3,
     })
+    Object.values(brokers).forEach(broker => {
+      broker.disconnect = jest.fn()
+    })
+    brokers[1].produce
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce(createProducerResponse(topic, 0))
+
+    const response = await sendMessages({ topicMessages: [{ topic, messages }] })
+
+    expect(brokers[1].disconnect).toHaveBeenCalledTimes(1)
+    expect(brokers[2].disconnect).not.toHaveBeenCalled()
+    expect(brokers[3].disconnect).not.toHaveBeenCalled()
+    expect(brokers[1].produce).toHaveBeenCalledTimes(2)
+    expect(brokers[2].produce).toHaveBeenCalledTimes(1)
+    expect(brokers[3].produce).toHaveBeenCalledTimes(1)
+    expect(brokers[1].disconnect.mock.invocationCallOrder[0]).toBeLessThan(
+      brokers[1].produce.mock.invocationCallOrder[1]
+    )
+    expect(response).toHaveLength(3)
+  })
+
+  test('resets the broker after every repeated produce timeout', async () => {
+    const sendMessages = createSendMessages({
+      retrier: retry({ retries: 2, initialRetryTime: 1, maxRetryTime: 1, factor: 0 }),
+      logger: newLogger(),
+      cluster,
+      partitioner,
+      eosManager,
+    })
+    const timeoutError = new KafkaJSRequestTimeoutError('Request Produce timed out', {
+      broker: 'broker-1:9092',
+      correlationId: 3,
+    })
     brokers[1].disconnect = jest.fn()
     brokers[1].produce
+      .mockRejectedValueOnce(timeoutError)
       .mockRejectedValueOnce(timeoutError)
       .mockResolvedValueOnce(createProducerResponse(topic, 0))
 
     await sendMessages({ topicMessages: [{ topic, messages }] })
 
-    expect(brokers[1].disconnect).toHaveBeenCalledTimes(1)
-    expect(brokers[1].produce).toHaveBeenCalledTimes(2)
-    expect(brokers[1].disconnect.mock.invocationCallOrder[0]).toBeLessThan(
-      brokers[1].produce.mock.invocationCallOrder[1]
-    )
+    expect(brokers[1].disconnect).toHaveBeenCalledTimes(2)
+    expect(brokers[1].produce).toHaveBeenCalledTimes(3)
   })
 
   const PRODUCE_ERRORS = [
@@ -180,9 +211,11 @@ describe('Producer > sendMessages', () => {
           throw createErrorFromCode(errorCodes.find(({ type }) => type === errorType).code)
         })
         .mockImplementationOnce(() => createProducerResponse(topic, 0))
+      brokers[1].disconnect = jest.fn()
 
       await sendMessages({ topicMessages: [{ topic, messages }] })
       expect(brokers[1].produce).toHaveBeenCalledTimes(2)
+      expect(brokers[1].disconnect).not.toHaveBeenCalled()
       expect(cluster.refreshMetadata).toHaveBeenCalled()
     })
   }
