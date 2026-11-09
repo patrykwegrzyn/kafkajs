@@ -1,6 +1,7 @@
 jest.mock('./groupMessagesPerPartition')
 const { newLogger } = require('testHelpers')
 const { errorCodes, createErrorFromCode } = require('../protocol/error')
+const { KafkaJSRequestTimeoutError } = require('../errors')
 const retry = require('../retry')
 const createSendMessages = require('./sendMessages')
 
@@ -131,6 +132,32 @@ describe('Producer > sendMessages', () => {
       { errorCode: 0, offset: '0', partition: 0, timestamp: '-1', topicName: 'topic-name' },
       { errorCode: 0, offset: '2', partition: 2, timestamp: '-1', topicName: 'topic-name' },
     ])
+  })
+
+  test('disconnects a timed out broker before retrying produce', async () => {
+    const sendMessages = createSendMessages({
+      retrier: retry({ retries: 1, initialRetryTime: 1, maxRetryTime: 1, factor: 0 }),
+      logger: newLogger(),
+      cluster,
+      partitioner,
+      eosManager,
+    })
+    const timeoutError = new KafkaJSRequestTimeoutError('Request Produce timed out', {
+      broker: 'broker-1:9092',
+      correlationId: 3,
+    })
+    brokers[1].disconnect = jest.fn()
+    brokers[1].produce
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce(createProducerResponse(topic, 0))
+
+    await sendMessages({ topicMessages: [{ topic, messages }] })
+
+    expect(brokers[1].disconnect).toHaveBeenCalledTimes(1)
+    expect(brokers[1].produce).toHaveBeenCalledTimes(2)
+    expect(brokers[1].disconnect.mock.invocationCallOrder[0]).toBeLessThan(
+      brokers[1].produce.mock.invocationCallOrder[1]
+    )
   })
 
   const PRODUCE_ERRORS = [
