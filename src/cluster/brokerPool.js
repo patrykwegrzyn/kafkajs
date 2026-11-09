@@ -150,11 +150,14 @@ module.exports = class BrokerPool {
    * @returns {Promise<null>}
    */
   async refreshMetadata(topics) {
-    const broker = await this.findConnectedBroker()
     const { host: seedHost, port: seedPort } = this.seedBroker.connectionPool
 
     return this.retrier(async (bail, retryCount, retryTime) => {
       try {
+        // A broker can disconnect after it has been selected but before the
+        // metadata request is written. Select again on every attempt so a
+        // retry cannot remain pinned to a stale Broker instance.
+        const broker = await this.findConnectedBroker()
         this.metadata = await broker.metadata(topics)
         this.metadataExpireAt = Date.now() + this.metadataMaxAge
 
@@ -206,7 +209,11 @@ module.exports = class BrokerPool {
         const replacedBrokersDisconnects = replacedBrokers.map(broker => broker.disconnect())
         await Promise.all([...brokerDisconnects, ...replacedBrokersDisconnects])
       } catch (e) {
-        if (e.type === 'LEADER_NOT_AVAILABLE') {
+        if (
+          e.type === 'LEADER_NOT_AVAILABLE' ||
+          e.name === 'KafkaJSConnectionError' ||
+          e.message === 'Broker not connected'
+        ) {
           throw e
         }
 
