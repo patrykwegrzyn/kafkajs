@@ -117,6 +117,16 @@ module.exports = ({ logger, cluster, partitioner, eosManager, retrier }) => {
           responsePerBroker.set(broker, formattedResponse)
         } catch (e) {
           responsePerBroker.delete(broker)
+
+          // A request timeout removes the request from the queue, but the
+          // connection itself still reports as connected. Retrying on that
+          // broker would therefore reuse the same potentially half-open
+          // socket forever. Reset only the failed broker so the next attempt
+          // establishes a fresh connection.
+          if (e.name === 'KafkaJSRequestTimeoutError') {
+            await broker.disconnect()
+          }
+
           throw e
         } finally {
           await eosManager.releaseBrokerLock(broker)
@@ -135,6 +145,18 @@ module.exports = ({ logger, cluster, partitioner, eosManager, retrier }) => {
       } catch (e) {
         if (e.name === 'KafkaJSConnectionClosedError') {
           cluster.removeBroker({ host: e.host, port: e.port })
+        }
+
+        if (e.name === 'KafkaJSRequestTimeoutError') {
+          logger.error(
+            `Produce request timed out; disconnected broker before retry: ${e.message}`,
+            {
+              broker: e.broker,
+              retryCount,
+              retryTime,
+            }
+          )
+          throw e
         }
 
         if (!cluster.isConnected()) {
